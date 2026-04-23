@@ -1,0 +1,218 @@
+Build a fully offline browser-based voice chat web app on Linux that uses the microphone from the user's web browser and connects to an already running local `llama-server` backend.
+
+## Existing environment
+
+* `llama.cpp` is already built
+* The model is:
+  `./models/gemma-4-e2b-it/gemma-4-E2B-it-Q4_K_M.gguf`
+* `llama-server` is already being used
+* The app must run locally and stay fully offline
+* The browser UI must capture microphone audio directly from the browser with `getUserMedia`
+
+## Goal
+
+Create a local web app with this pipeline:
+
+Browser microphone → local speech-to-text backend → local `llama-server` → local text-to-speech backend → browser playback
+
+The user should be able to open a local webpage, press a button to talk, have their speech transcribed, send it to Gemma through `llama-server`, receive a reply, and hear the spoken response in the browser.
+
+## High-level requirements
+
+Build a complete working implementation with:
+
+1. A backend web server
+2. A browser frontend
+3. Speech-to-text integration
+4. `llama-server` integration
+5. Text-to-speech integration
+6. Simple conversational UI
+
+Use a simple stack unless there is a strong reason otherwise:
+
+* Python backend with Flask or FastAPI
+* Plain HTML/CSS/JavaScript frontend
+* `MediaRecorder` or Web Audio API in browser
+* `whisper.cpp` or `faster-whisper` for STT
+* `piper` for TTS
+* Existing `llama-server` for chat completions
+
+## Backend requirements
+
+Create a backend app that:
+
+* Serves the frontend webpage
+* Accepts recorded audio uploads from the browser
+* Saves incoming audio to a temp file
+* Converts audio if needed into a format usable by STT
+* Transcribes audio locally
+* Sends the transcript to `http://127.0.0.1:8080/v1/chat/completions`
+* Maintains conversation history per browser session
+* Generates speech audio from the model reply using `piper`
+* Returns JSON containing:
+
+  * transcript
+  * assistant reply
+  * URL or binary audio for playback
+
+Suggested API routes:
+
+* `GET /` → serves the web page
+* `POST /api/chat` → accepts recorded audio and returns transcript + reply + TTS audio reference
+* `GET /api/health` → health check
+* `GET /audio/<filename>` → serves generated WAV files
+
+## Frontend requirements
+
+Create a simple browser UI that:
+
+* Requests microphone access with `navigator.mediaDevices.getUserMedia`
+* Has a clear record/start button
+* Has a stop button
+* Records audio from the browser microphone
+* Uploads the audio blob to the backend
+* Shows:
+
+  * user transcript
+  * assistant text reply
+* Plays returned TTS audio automatically in the browser
+* Shows status messages like:
+
+  * listening
+  * uploading
+  * transcribing
+  * thinking
+  * speaking
+
+The UI should be minimal and practical:
+
+* one-page app
+* chat transcript area
+* record/stop controls
+* status line
+* optional audio player element for debugging
+
+## `llama-server` integration
+
+Assume `llama-server` is already running locally. Verify it using:
+
+```bash
+curl http://127.0.0.1:8080/health
+```
+
+Send requests to:
+
+```text
+http://127.0.0.1:8080/v1/chat/completions
+```
+
+Use a system prompt like:
+
+```text
+You are a concise offline voice assistant. Reply conversationally, naturally, and briefly.
+```
+
+Keep responses short to reduce voice latency.
+
+## STT requirement
+
+Use one of these:
+
+* `faster-whisper` if easier and more reliable
+* `whisper.cpp` if preferred for local binary integration
+
+Choose the approach that is simplest to get working reliably on Linux.
+
+The backend must accept browser-recorded audio, convert it as needed, and transcribe it correctly.
+
+## TTS requirement
+
+Use `piper` for offline speech output.
+
+Generate a WAV file for each assistant reply and serve it back to the browser for playback.
+
+Choose a sensible default English voice if available.
+
+## File structure
+
+Create a clean project layout such as:
+
+```text
+voice_webapp/
+  app.py
+  requirements.txt
+  templates/
+    index.html
+  static/
+    app.js
+    style.css
+  temp/
+  tts_out/
+```
+
+You may adjust the layout if needed, but keep it simple and clear.
+
+## Deliverables
+
+Create all required files, including:
+
+1. `app.py`
+2. `requirements.txt`
+3. `templates/index.html`
+4. `static/app.js`
+5. `static/style.css`
+
+Also provide:
+
+* install commands
+* run commands
+* any required package installs
+* any notes about audio conversion dependencies such as `ffmpeg`
+
+## Functional expectations
+
+The finished app should work like this:
+
+1. User opens the local webpage
+2. User clicks record
+3. Browser captures mic audio
+4. User stops recording
+5. Audio is sent to local backend
+6. Backend transcribes speech locally
+7. Backend sends transcript to local `llama-server`
+8. Backend gets Gemma reply
+9. Backend generates TTS WAV locally
+10. Browser displays both transcript and reply
+11. Browser plays the generated speech audio
+
+## Constraints
+
+* Fully offline
+* No cloud APIs
+* Use browser microphone directly
+* Must work with the existing local `llama-server`
+* Must be easy to run on Linux
+* Prioritize a working end-to-end implementation over advanced features
+
+## Nice-to-have improvements
+
+If the basic version works, optionally add:
+
+* automatic scrolling chat history
+* per-session conversation memory
+* better error messages
+* push-to-talk UX
+* simple waveform or recording indicator
+* option to interrupt playback when a new recording starts
+
+## Output format
+
+Produce:
+
+* the complete source code for all files
+* exact install steps
+* exact run steps
+* notes on how to test locally in the browser
+
+Do not just describe the architecture. Implement the full working project.
+
