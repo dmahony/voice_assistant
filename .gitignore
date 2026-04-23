@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.temp/
+temp/
+tts_out/
+whisper_cache/
+models/
+.DS_Store
