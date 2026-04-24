@@ -9,12 +9,21 @@
 <body>
   <main class="app-shell">
     <header class="topbar">
-      <div>
+      <div class="brand-block">
+        <p class="eyebrow">offline • local-first • private</p>
         <h1>Offline Voice Assistant</h1>
-        <p>Browser mic → local STT → local llama-server → local TTS</p>
+        <p class="lede">Browser mic → local STT → local llama-server → local TTS</p>
+        <div class="feature-chips" aria-label="Highlights">
+          <span>Conversation-first</span>
+          <span>Voice profiles</span>
+          <span>LAN ready</span>
+        </div>
         <p id="connection-note" class="connection-note"></p>
       </div>
-      <div class="status-pill" id="status-pill">idle</div>
+      <div class="status-stack">
+        <div class="status-pill" id="status-pill">idle</div>
+        <div class="status-meta">Local mode.</div>
+      </div>
     </header>
 
     <section class="controls">
@@ -53,7 +62,17 @@
       <strong>Status:</strong> <span id="status-text">Ready.</span>
     </section>
 
-    <section class="chat" id="chat"></section>
+    <section class="chat" id="chat">
+      <article class="chat-empty" id="chat-empty">
+        <h2>Ready to listen</h2>
+        <p>Press Start recording, speak naturally, and the assistant will reply locally.</p>
+        <div class="chat-empty-actions">
+          <span>1. Record</span>
+          <span>2. Transcribe</span>
+          <span>3. Reply + play</span>
+        </div>
+      </article>
+    </section>
 
     <section class="debug-panel">
       <label for="audio-player">Audio playback</label>

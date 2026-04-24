@@ -38,6 +38,7 @@ function scrollChatToBottom() {
 }
 
 function addMessage(role, text) {
+  removeChatEmptyState();
   const row = document.createElement('article');
   row.className = `message ${role}`;
   const head = document.createElement('div');
@@ -54,6 +55,7 @@ function addMessage(role, text) {
 }
 
 function addTranscribingIndicator() {
+  removeChatEmptyState();
   removeTranscribingIndicator();
   const row = document.createElement('article');
   row.className = 'message assistant transient transcribing';
@@ -91,9 +93,28 @@ function removeTranscribingIndicator() {
   }
 }
 
-function clearChat() {
+function setChatEmptyState() {
   removeTranscribingIndicator();
-  chatEl.innerHTML = '';
+  chatEl.innerHTML = `
+    <article class="chat-empty" id="chat-empty">
+      <h2>Ready to listen</h2>
+      <p>Press Start recording, speak naturally, and the assistant will reply locally.</p>
+      <div class="chat-empty-actions">
+        <span>1. Record</span>
+        <span>2. Transcribe</span>
+        <span>3. Reply + play</span>
+      </div>
+    </article>
+  `;
+}
+
+function removeChatEmptyState() {
+  const empty = document.getElementById('chat-empty');
+  if (empty) empty.remove();
+}
+
+function clearChat() {
+  setChatEmptyState();
   setStatus('Chat cleared.', 'idle');
 }
 
@@ -526,11 +547,14 @@ window.addEventListener('beforeunload', () => {
     const sessionData = await fetchJson('/api/session');
     if (sessionData.messages?.length) {
       sessionData.messages.filter((m) => m.role !== 'system').forEach((m) => addMessage(m.role, m.content));
+    } else {
+      setChatEmptyState();
     }
     await refreshVoiceLibrary();
     setStatus('Ready.', 'idle');
   } catch (err) {
     console.warn(err);
+    setChatEmptyState();
     setStatus('Ready, but session history could not be loaded.', 'error');
   }
 })();

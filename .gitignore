@@ -3,6 +3,9 @@ __pycache__/
 temp/
 tts_out/
 tls/*.key
+tls/*.srl
+tls/backup/
+tls/openssl-*.cnf
 prompt.txt
 xtts-venv
 .venv/
