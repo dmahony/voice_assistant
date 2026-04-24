@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Offline Voice Assistant</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1>Offline Voice Assistant</h1>
+        <p>Browser mic → local STT → local llama-server → local TTS</p>
+      </div>
+      <div class="status-pill" id="status-pill">idle</div>
+    </header>
+
+    <section class="controls">
+      <button id="start-btn" class="primary">Start recording</button>
+      <button id="stop-btn" disabled>Stop</button>
+      <button id="clear-btn" class="ghost">Clear chat</button>
+    </section>
+
+    <section class="status-line">
+      <strong>Status:</strong> <span id="status-text">Ready.</span>
+    </section>
+
+    <section class="chat" id="chat"></section>
+
+    <section class="debug-panel">
+      <label for="audio-player">Audio playback</label>
+      <audio id="audio-player" controls></audio>
+    </section>
+  </main>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

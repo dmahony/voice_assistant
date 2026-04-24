@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+temp/
+tts_out/
+tls/*.key
+prompt.txt
