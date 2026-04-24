@@ -8,7 +8,10 @@ const audioPlayer = document.getElementById('audio-player');
 const voiceNameInput = document.getElementById('voice-name');
 const voiceStartBtn = document.getElementById('voice-start-btn');
 const voiceStopBtn = document.getElementById('voice-stop-btn');
+const voiceFileInput = document.getElementById('voice-file');
+const voiceUploadBtn = document.getElementById('voice-upload-btn');
 const voiceListEl = document.getElementById('voice-list');
+const connectionNoteEl = document.getElementById('connection-note');
 
 const chatState = { mediaRecorder: null, chunks: [], stream: null };
 const voiceState = { mediaRecorder: null, chunks: [], stream: null };
@@ -19,6 +22,15 @@ function setStatus(text, mode = 'idle') {
   statusText.textContent = text;
   statusPill.textContent = mode === 'transcribing' ? 'transcribing…' : mode;
   statusPill.dataset.mode = mode;
+}
+
+function setConnectionNote(text, tone = '') {
+  if (!connectionNoteEl) return;
+  connectionNoteEl.textContent = text;
+  connectionNoteEl.className = 'connection-note';
+  if (tone) {
+    connectionNoteEl.classList.add(tone);
+  }
 }
 
 function scrollChatToBottom() {
@@ -235,7 +247,12 @@ async function handleChatRecordingStop() {
       stopPlayback();
       audioPlayer.src = data.audio_url;
       activeAudioUrl = null;
-      await audioPlayer.play();
+      try {
+        await audioPlayer.play();
+      } catch (err) {
+        console.warn(err);
+        setStatus('Reply ready. Tap Play to hear audio.', 'idle');
+      }
     }
 
     setStatus('Ready.', 'idle');
@@ -309,6 +326,48 @@ async function handleVoiceRecordingStop() {
     renderVoiceList(data.voices);
   } finally {
     resetVoiceRecorderState();
+    await refreshVoiceLibrary();
+  }
+}
+
+async function uploadVoiceFile() {
+  if (recorderHasAudio(chatState) || recorderHasAudio(voiceState)) {
+    setStatus('Stop any active recording before uploading a voice file.', 'error');
+    return;
+  }
+
+  const name = voiceNameInput.value.trim();
+  if (!name) {
+    setStatus('Enter a voice name before uploading a file.', 'error');
+    voiceNameInput.focus();
+    return;
+  }
+
+  const file = voiceFileInput?.files?.[0];
+  if (!file) {
+    setStatus('Choose an audio file to upload.', 'error');
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('name', name);
+  formData.append('audio', file, file.name || 'voice-upload');
+
+  try {
+    voiceUploadBtn.disabled = true;
+    voiceUploadBtn.textContent = 'Uploading...';
+    setStatus('Uploading voice file...', 'uploading');
+    const data = await fetchJson('/api/voices', { method: 'POST', body: formData });
+    voiceNameInput.value = '';
+    voiceFileInput.value = '';
+    setStatus(`Uploaded voice “${data.voice.name}”. Converted to WAV automatically.`, 'idle');
+    renderVoiceList(data.voices);
+  } catch (err) {
+    console.error(err);
+    setStatus(`Error: ${err.message}`, 'error');
+  } finally {
+    voiceUploadBtn.disabled = false;
+    voiceUploadBtn.textContent = 'Upload file';
     await refreshVoiceLibrary();
   }
 }
@@ -440,6 +499,12 @@ voiceStartBtn.addEventListener('click', () => {
   });
 });
 voiceStopBtn.addEventListener('click', stopVoiceRecording);
+voiceUploadBtn.addEventListener('click', () => {
+  uploadVoiceFile().catch((err) => {
+    console.error(err);
+    setStatus(`Error: ${err.message}`, 'error');
+  });
+});
 
 window.addEventListener('beforeunload', () => {
   stopPlayback();
@@ -448,6 +513,15 @@ window.addEventListener('beforeunload', () => {
 });
 
 (async function init() {
+  if (!window.isSecureContext) {
+    setConnectionNote(
+      'Microphone capture requires HTTPS or localhost. For Android over USB, run: adb reverse tcp:8000 tcp:8000 then open http://127.0.0.1:8000 on the phone.',
+      'warning',
+    );
+  } else {
+    setConnectionNote(`Connected on ${window.location.origin}.`, 'ok');
+  }
+
   try {
     const sessionData = await fetchJson('/api/session');
     if (sessionData.messages?.length) {

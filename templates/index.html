@@ -12,6 +12,7 @@
       <div>
         <h1>Offline Voice Assistant</h1>
         <p>Browser mic → local STT → local llama-server → local TTS</p>
+        <p id="connection-note" class="connection-note"></p>
       </div>
       <div class="status-pill" id="status-pill">idle</div>
     </header>
@@ -36,8 +37,13 @@
         <button id="voice-stop-btn" disabled>Stop & save</button>
       </div>
 
+      <div class="voice-upload-row">
+        <input id="voice-file" class="voice-file-input" type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.webm,.flac,.aac,.opus" />
+        <button id="voice-upload-btn">Upload file</button>
+      </div>
+
       <div class="voice-note">
-        Use a clean 10–30 second recording. Saved voices are converted to 24 kHz mono WAV for XTTS.
+        Use a clean 10–30 second recording or upload an audio file. Any supported audio format will be converted to 24 kHz mono WAV for XTTS.
       </div>
 
       <div id="voice-list" class="voice-list"></div>
@@ -51,7 +57,7 @@
 
     <section class="debug-panel">
       <label for="audio-player">Audio playback</label>
-      <audio id="audio-player" controls></audio>
+      <audio id="audio-player" controls playsinline></audio>
     </section>
   </main>
 

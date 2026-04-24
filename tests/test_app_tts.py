@@ -39,7 +39,6 @@ class AppTtsTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
-            out_file = out_dir / "session.wav"
 
             def fake_run(cmd, input=None, check=None, stdout=None, stderr=None, timeout=None, env=None):
                 if "--output_file" in cmd:
@@ -57,6 +56,40 @@ class AppTtsTests(unittest.TestCase):
                 self.assertTrue(result.exists())
                 self.assertEqual(result.read_bytes(), b"RIFFTEST")
 
+    def test_api_voices_accepts_uploaded_non_wav_file(self):
+        sys.modules.pop("app", None)
+        import app
+        from fastapi.testclient import TestClient
 
-if __name__ == "__main__":
+        client = TestClient(app.app)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            upload_bytes = b'fake mp3 bytes'
+
+            def fake_create_voice_profile(base_dir, name, source_path):
+                self.assertEqual(base_dir, base)
+                self.assertEqual(name, 'Upload Voice')
+                self.assertEqual(source_path.suffix, '.mp3')
+                self.assertTrue(source_path.exists())
+                self.assertEqual(source_path.read_bytes(), upload_bytes)
+                return {'id': 'voice-1', 'name': name, 'wav_path': str(base / 'voices' / 'voice-1' / 'reference.wav')}
+
+            with mock.patch.object(app, 'BASE_DIR', base), \
+                 mock.patch.object(app, 'create_voice_profile', side_effect=fake_create_voice_profile), \
+                 mock.patch.object(app, 'list_voice_profiles', return_value=[]):
+                response = client.post(
+                    '/api/voices',
+                    data={'name': 'Upload Voice'},
+                    files={'audio': ('sample.mp3', upload_bytes, 'audio/mpeg')},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload['ok'])
+        self.assertEqual(payload['voice']['name'], 'Upload Voice')
+
+
+if __name__ == '__main__':
     unittest.main()
+

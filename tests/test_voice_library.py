@@ -65,6 +65,18 @@ class VoiceLibraryTests(unittest.TestCase):
             default = Path('/tmp/default.wav')
             self.assertEqual(vl.resolve_xtts_speaker_wav(Path(tmp), default), default)
 
+    def test_convert_audio_to_voice_wav_surfaces_ffmpeg_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / 'sample.mp3'
+            source.write_bytes(b'not-an-mp3-but-good-enough-for-a-failing-test')
+            output = base / 'out.wav'
+
+            exc = vl.subprocess.CalledProcessError(1, ['ffmpeg'], stderr=b'invalid input format')
+            with mock.patch.object(vl.subprocess, 'run', side_effect=exc):
+                with self.assertRaisesRegex(RuntimeError, 'invalid input format'):
+                    vl.convert_audio_to_voice_wav(source, output)
+
 
 if __name__ == '__main__':
     unittest.main()

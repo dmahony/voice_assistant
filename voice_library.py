@@ -107,7 +107,18 @@ def convert_audio_to_voice_wav(source_path: Path, output_path: Path) -> Path:
         "-vn",
         str(output_path),
     ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or b"").decode("utf-8", errors="replace").strip()
+        stdout = (exc.stdout or b"").decode("utf-8", errors="replace").strip()
+        details = stderr or stdout or str(exc)
+        raise RuntimeError(f"ffmpeg failed to convert {source_path} to WAV: {details}") from exc
     return output_path
 
 

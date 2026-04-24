@@ -38,6 +38,7 @@ TTS:
 - The app sets `COQUI_TOS_AGREED=1` for the helper process so the model download does not prompt interactively.
 - If XTTS is unavailable, the app falls back to Piper, then `espeak-ng` or `espeak`.
 - Saved voices are stored under `voices/` and can be selected from the Voice clone panel.
+- You can also upload a voice file in the Voice clone panel; non-WAV audio is converted to WAV automatically.
 
 STT:
 
