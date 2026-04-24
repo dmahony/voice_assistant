@@ -8,6 +8,7 @@ import subprocess
 import threading
 import time
 import uuid
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -44,11 +45,13 @@ WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "base.en")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")
 WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
 WHISPER_DOWNLOAD_ROOT = os.environ.get("WHISPER_DOWNLOAD_ROOT")
-PIPER_BIN = os.environ.get("PIPER_BIN", "/home/dan/voice_assistant_app/home/dan/voice_assistant/venv/bin/piper")
+PIPER_BIN = os.environ.get("PIPER_BIN", "piper")
 PIPER_VOICE_MODEL = os.environ.get("PIPER_VOICE_MODEL", "")
 MAX_HISTORY_MESSAGES = int(os.environ.get("MAX_HISTORY_MESSAGES", "12"))
 HTTP_TIMEOUT = float(os.environ.get("LLAMA_TIMEOUT", "120"))
 TTS_BACKEND = os.environ.get("TTS_BACKEND", "xtts").strip().lower()
+XTTS_SERVER_URL = os.environ.get("XTTS_SERVER_URL", "").strip()
+XTTS_SERVER_TIMEOUT = float(os.environ.get("XTTS_SERVER_TIMEOUT", "600"))
 XTTS_MODEL_NAME = os.environ.get(
     "XTTS_MODEL_NAME",
     "tts_models/multilingual/multi-dataset/xtts_v2",
@@ -60,6 +63,7 @@ XTTS_PYTHON = os.environ.get("XTTS_PYTHON", str(BASE_DIR / "xtts-venv" / "bin" /
 XTTS_HELPER = os.environ.get("XTTS_HELPER", str(BASE_DIR / "xtts_synth.py"))
 SSL_CERTFILE = os.environ.get("SSL_CERTFILE", str(BASE_DIR / "tls" / "voice_assistant.crt"))
 SSL_KEYFILE = os.environ.get("SSL_KEYFILE", str(BASE_DIR / "tls" / "voice_assistant.key"))
+DISABLE_TLS = os.environ.get("DISABLE_TLS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 app = FastAPI(title="Offline Voice Assistant", version="1.0.0")
 app.add_middleware(
@@ -197,10 +201,17 @@ def _xtts_ready() -> bool:
     return python_ok and Path(XTTS_HELPER).exists() and _current_xtts_speaker_wav().exists()
 
 
+def _xtts_server_ready() -> bool:
+    return bool(XTTS_SERVER_URL)
+
+
 def _available_tts_backends() -> list[str]:
     backends: list[str] = []
-    if TTS_BACKEND in {"xtts", "auto"} and _xtts_ready():
-        backends.append("xtts")
+    if TTS_BACKEND in {"xtts", "auto"}:
+        if _xtts_server_ready():
+            backends.append("xtts-server")
+        if _xtts_ready():
+            backends.append("xtts")
     if bool(PIPER_VOICE_MODEL) and shutil.which(PIPER_BIN) is not None and Path(PIPER_VOICE_MODEL).exists():
         backends.append("piper")
     if shutil.which("espeak-ng"):
@@ -224,6 +235,9 @@ def _synthesize_speech(text: str, session_id: str) -> Path:
     errors: list[str] = []
     for backend in backends:
         try:
+            if backend == "xtts-server":
+                returned_path = _call_xtts_server(text, out_file)
+                return returned_path
             if backend == "xtts":
                 gpu_flag = [] if XTTS_DEVICE.lower() in {"cpu", "false", "0", "no"} else ["--gpu"]
                 cmd = [
@@ -269,8 +283,47 @@ def _synthesize_speech(text: str, session_id: str) -> Path:
             stdout = (exc.stdout or b"").decode("utf-8", errors="replace").strip()
             details = stderr or stdout or str(exc)
             errors.append(f"{backend}: {details}")
+        except subprocess.TimeoutExpired as exc:
+            errors.append(f"{backend}: timed out after {exc.timeout}s")
+        except Exception as exc:
+            details = str(exc).strip() or exc.__class__.__name__
+            if backend == "xtts-server":
+                print(f"XTTS server failed, falling back to local synthesis: {details}", file=sys.stderr)
+            errors.append(f"{backend}: {details}")
 
     raise RuntimeError("All offline TTS backends failed: " + " | ".join(errors))
+
+
+def _call_xtts_server(text: str, output_path: Path) -> Path:
+    if not XTTS_SERVER_URL:
+        raise RuntimeError("XTTS_SERVER_URL is not configured")
+
+    speaker_wav = _current_xtts_speaker_wav()
+    payload = {
+        "text": text,
+        "speaker_wav": str(speaker_wav),
+        "language": XTTS_LANGUAGE,
+        "output_path": str(output_path),
+    }
+    response = requests.post(XTTS_SERVER_URL, json=payload, timeout=XTTS_SERVER_TIMEOUT)
+    try:
+        data = response.json()
+    except Exception as exc:
+        snippet = response.text[:500].strip()
+        raise RuntimeError(
+            f"XTTS server returned invalid JSON (HTTP {response.status_code}): {snippet or response.reason}"
+        ) from exc
+
+    if not response.ok or not isinstance(data, dict) or not data.get("ok"):
+        error = data.get("error") if isinstance(data, dict) else None
+        raise RuntimeError(
+            f"XTTS server error (HTTP {response.status_code}): {error or response.text[:500].strip() or response.reason}"
+        )
+
+    returned = Path(str(data.get("output_path") or output_path))
+    if not returned.exists():
+        raise RuntimeError(f"XTTS server reported success but output file is missing: {returned}")
+    return returned
 
 
 def _chat_with_session(session_id: str, transcript: str) -> dict[str, str | None]:
@@ -326,6 +379,7 @@ def health():
         "llama_server": llama_status,
         "whisper_model": WHISPER_MODEL_NAME,
         "tts_backend": _find_tts_backend(),
+        "xtts_server_url": XTTS_SERVER_URL or None,
         "xtts_model": XTTS_MODEL_NAME,
         "active_voice_wav": str(_current_xtts_speaker_wav()),
         "voice_count": len(list_voice_profiles(BASE_DIR)),
@@ -492,7 +546,7 @@ if __name__ == "__main__":
     import uvicorn
 
     ssl_kwargs: dict[str, str] = {}
-    if Path(SSL_CERTFILE).exists() and Path(SSL_KEYFILE).exists():
+    if not DISABLE_TLS and Path(SSL_CERTFILE).exists() and Path(SSL_KEYFILE).exists():
         ssl_kwargs = {
             "ssl_certfile": SSL_CERTFILE,
             "ssl_keyfile": SSL_KEYFILE,
