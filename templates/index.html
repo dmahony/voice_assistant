@@ -22,6 +22,27 @@
       <button id="clear-btn" class="ghost">Clear chat</button>
     </section>
 
+    <section class="voice-panel">
+      <div class="voice-panel-head">
+        <div>
+          <h2>Voice clone</h2>
+          <p>Record a sample, name it, and save it as a selectable XTTS speaker profile.</p>
+        </div>
+      </div>
+
+      <div class="voice-form">
+        <input id="voice-name" type="text" maxlength="64" placeholder="Voice name" />
+        <button id="voice-start-btn" class="primary">Record sample</button>
+        <button id="voice-stop-btn" disabled>Stop & save</button>
+      </div>
+
+      <div class="voice-note">
+        Use a clean 10–30 second recording. Saved voices are converted to 24 kHz mono WAV for XTTS.
+      </div>
+
+      <div id="voice-list" class="voice-list"></div>
+    </section>
+
     <section class="status-line">
       <strong>Status:</strong> <span id="status-text">Ready.</span>
     </section>

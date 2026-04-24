@@ -12,10 +12,18 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+
+from voice_library import (
+    create_voice_profile,
+    delete_voice_profile,
+    list_voice_profiles,
+    resolve_xtts_speaker_wav,
+    select_voice_profile,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -46,7 +54,7 @@ XTTS_MODEL_NAME = os.environ.get(
     "tts_models/multilingual/multi-dataset/xtts_v2",
 )
 XTTS_LANGUAGE = os.environ.get("XTTS_LANGUAGE", "en")
-XTTS_SPEAKER_WAV = os.environ.get("XTTS_SPEAKER_WAV", str(BASE_DIR / "test.wav"))
+XTTS_SPEAKER_WAV = os.environ.get("XTTS_SPEAKER_WAV", "/tmp/other-way.wav")
 XTTS_DEVICE = os.environ.get("XTTS_DEVICE", "cpu")
 XTTS_PYTHON = os.environ.get("XTTS_PYTHON", str(BASE_DIR / "xtts-venv" / "bin" / "python"))
 XTTS_HELPER = os.environ.get("XTTS_HELPER", str(BASE_DIR / "xtts_synth.py"))
@@ -179,9 +187,14 @@ def _call_llama_server(messages: list[dict[str, str]]) -> str:
     return reply
 
 
+def _current_xtts_speaker_wav() -> Path:
+    default_wav = Path(XTTS_SPEAKER_WAV)
+    return resolve_xtts_speaker_wav(BASE_DIR, default_wav)
+
+
 def _xtts_ready() -> bool:
     python_ok = Path(XTTS_PYTHON).exists() or shutil.which(XTTS_PYTHON) is not None
-    return python_ok and Path(XTTS_HELPER).exists() and Path(XTTS_SPEAKER_WAV).exists()
+    return python_ok and Path(XTTS_HELPER).exists() and _current_xtts_speaker_wav().exists()
 
 
 def _available_tts_backends() -> list[str]:
@@ -219,7 +232,7 @@ def _synthesize_speech(text: str, session_id: str) -> Path:
                     "--model-name",
                     XTTS_MODEL_NAME,
                     "--speaker-wav",
-                    XTTS_SPEAKER_WAV,
+                    str(_current_xtts_speaker_wav()),
                     "--language",
                     XTTS_LANGUAGE,
                     "--output",
@@ -314,6 +327,8 @@ def health():
         "whisper_model": WHISPER_MODEL_NAME,
         "tts_backend": _find_tts_backend(),
         "xtts_model": XTTS_MODEL_NAME,
+        "active_voice_wav": str(_current_xtts_speaker_wav()),
+        "voice_count": len(list_voice_profiles(BASE_DIR)),
     }
 
 
@@ -412,6 +427,65 @@ def api_session(request: Request):
             max_age=60 * 60 * 24 * 30,
         )
     return response
+
+
+@app.get("/api/voices")
+def api_voices():
+    library = list_voice_profiles(BASE_DIR)
+    return {
+        "ok": True,
+        "voices": library,
+        "active_voice_id": next((voice["id"] for voice in library if voice.get("selected")), None),
+        "speaker_wav": str(_current_xtts_speaker_wav()),
+    }
+
+
+@app.post("/api/voices")
+async def api_create_voice(name: str = Form(...), audio: UploadFile = File(...)):
+    suffix = Path(audio.filename or "voice.webm").suffix or ".webm"
+    input_path = TEMP_DIR / f"voice_{uuid.uuid4().hex}{suffix}"
+    with input_path.open("wb") as f:
+        f.write(await audio.read())
+
+    try:
+        profile = create_voice_profile(BASE_DIR, name, input_path)
+        return {
+            "ok": True,
+            "voice": profile,
+            "voices": list_voice_profiles(BASE_DIR),
+            "speaker_wav": str(_current_xtts_speaker_wav()),
+        }
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    finally:
+        try:
+            if input_path.exists():
+                input_path.unlink()
+        except Exception:
+            pass
+
+
+@app.post("/api/voices/select")
+def api_select_voice(voice_id: str = Form(...)):
+    try:
+        profile = select_voice_profile(BASE_DIR, voice_id)
+        return {
+            "ok": True,
+            "voice": profile,
+            "voices": list_voice_profiles(BASE_DIR),
+            "speaker_wav": str(_current_xtts_speaker_wav()),
+        }
+    except KeyError:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Voice not found"})
+
+
+@app.delete("/api/voices/{voice_id}")
+def api_delete_voice(voice_id: str):
+    try:
+        delete_voice_profile(BASE_DIR, voice_id)
+        return {"ok": True, "voices": list_voice_profiles(BASE_DIR), "speaker_wav": str(_current_xtts_speaker_wav())}
+    except KeyError:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Voice not found"})
 
 
 if __name__ == "__main__":

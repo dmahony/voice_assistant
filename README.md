@@ -28,12 +28,13 @@ sudo apt install ffmpeg
 TTS:
 
 - Preferred: Coqui XTTS v2.
-- The app uses `test.wav` as the default speaker reference for XTTS.
+- The app uses `/tmp/other-way.wav` as the default speaker reference for XTTS.
 - To use your own voice, set `XTTS_SPEAKER_WAV` to a clean mono WAV sample of your voice.
 - XTTS runs in a separate Python 3.11 helper environment at `xtts-venv/`; install `TTS` there.
 - First XTTS use downloads the model automatically and can take a while.
 - The app sets `COQUI_TOS_AGREED=1` for the helper process so the model download does not prompt interactively.
 - If XTTS is unavailable, the app falls back to Piper, then `espeak-ng` or `espeak`.
+- Saved voices are stored under `voices/` and can be selected from the Voice clone panel.
 
 STT:
 
@@ -70,7 +71,7 @@ PORT=8001 uvicorn app:app --host 127.0.0.1 --port 8001
 - `TTS_BACKEND` – default `xtts`
 - `XTTS_MODEL_NAME` – default `tts_models/multilingual/multi-dataset/xtts_v2`
 - `XTTS_LANGUAGE` – default `en`
-- `XTTS_SPEAKER_WAV` – default `test.wav`
+- `XTTS_SPEAKER_WAV` – default `/tmp/other-way.wav`
 - `XTTS_DEVICE` – default `cpu`
 - `XTTS_PYTHON` – default `xtts-venv/bin/python`
 - `XTTS_HELPER` – default `xtts_synth.py`
@@ -79,12 +80,14 @@ PORT=8001 uvicorn app:app --host 127.0.0.1 --port 8001
 
 ## Browser test flow
 
-1. Open `http://127.0.0.1:8000` on the same machine, or `http://<this-machine-LAN-IP>:8000` from another computer on the network.
-2. Click `Start recording`.
-3. Allow microphone access.
-4. Speak.
-5. Click `Stop`.
-6. The app uploads audio, transcribes it, sends it to llama-server, and plays the synthesized response.
+1. Open `https://127.0.0.1:8000` on the same machine, or `https://<this-machine-LAN-IP>:8000` from another computer on the network.
+2. Trust the self-signed certificate if your browser asks.
+3. Use the Voice clone panel to record a sample and give it a name.
+4. Click `Start recording`.
+5. Allow microphone access.
+6. Speak.
+7. Click `Stop`.
+8. The app uploads audio, transcribes it, sends it to llama-server, and plays the synthesized response.
 
 ## Notes
 

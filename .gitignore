@@ -4,3 +4,6 @@ temp/
 tts_out/
 tls/*.key
 prompt.txt
+xtts-venv
+.venv/
+voices/
