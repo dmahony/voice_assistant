@@ -1,76 +1,60 @@
 # Offline Voice Assistant
 
-A local browser-based voice chat app that records microphone audio in the browser, transcribes it locally, sends the text to a local llama-server, synthesizes a spoken reply locally, and plays the response in the browser.
+A browser-based voice assistant that runs entirely locally.
 
-## Files
+## Features
+- **Hands-free / VAD Mode**: Automatically detects speech and silence.
+- **Streaming LLM Replies**: Shows text as it's generated.
+- **Sentence-by-Sentence TTS**: Starts speaking the first sentence immediately while the rest is still generating.
+- **Wake Word Support**: Optional wake phrase (default: "computer").
+- **Push-to-Talk**: Use a keyboard shortcut (default: Spacebar) to talk.
+- **Safe Local Tools**: Get time, check health, disk usage, etc.
+- **Persistent Memory**: SQLite-backed session and message history.
+- **Settings & Debug Pages**: Configure backend URLs, models, and monitor system health.
+- **Optimized Pipeline**: TTS caching and automatic cleanup of old audio files.
 
-- `app.py` – FastAPI backend
-- `requirements.txt` – Python dependencies
-- `templates/index.html` – main page
-- `static/app.js` – browser recording / upload / playback logic
-- `static/style.css` – minimal UI styling
+## Tech Stack
+- **Frontend**: Vanilla JS, Web Audio API, WebRTC MediaRecorder.
+- **Backend**: FastAPI, Python 3.10+.
+- **STT**: `faster-whisper`.
+- **LLM**: `llama.cpp` (llama-server) or any OpenAI-compatible API.
+- **TTS**: `Piper`, `espeak-ng`, or `espeak`.
 
-## Install
+## Installation
 
-```bash
-cd /home/dan/voice_assistant
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+1. **Clone the repo**:
+   ```bash
+   git clone https://github.com/dmahony/voice_assistant.git
+   cd voice_assistant
+   ```
 
-System packages:
+2. **Setup virtual environment**:
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
 
-```bash
-sudo apt install ffmpeg
-```
+3. **Install System Dependencies**:
+   - `ffmpeg` (for audio conversion)
+   - `piper` (recommended) or `espeak-ng`
 
-TTS:
+4. **Run**:
+   ```bash
+   python app.py
+   ```
 
-- Preferred: install Piper and set `PIPER_VOICE_MODEL` to a local `.onnx` voice file.
-- Fallback: if Piper is unavailable, the app will try `espeak-ng` or `espeak`.
+## Configuration
+Settings can be changed in the UI under the "Settings" page or via `config.local.json`.
+Environment variables also override settings:
+- `LLAMA_CHAT_URL`: Endpoint for chat completions.
+- `WHISPER_MODEL`: Model size (tiny.en, base.en, etc.).
+- `LLAMA_STREAM`: Set to `1` for streaming.
 
-STT:
+## Development / Debugging
+Visit `/debug` to see backend health, recent errors, and status of each component.
 
-- Defaults to `faster-whisper` with `base.en`.
-- If the model is not already cached locally, pre-download it once before going fully offline.
-
-## Run
-
-```bash
-cd /home/dan/voice_assistant
-source .venv/bin/activate
-uvicorn app:app --host 127.0.0.1 --port 8000
-```
-
-If port 8000 is busy, use another port:
-
-```bash
-PORT=8001 uvicorn app:app --host 127.0.0.1 --port 8001
-```
-
-## Environment variables
-
-- `LLAMA_CHAT_URL` – default `http://127.0.0.1:8080/v1/chat/completions`
-- `LLAMA_HEALTH_URL` – default `http://127.0.0.1:8080/health`
-- `LLAMA_MODEL` – optional model name to send to llama-server
-- `WHISPER_MODEL` – default `base.en`
-- `WHISPER_DEVICE` – default `cpu`
-- `WHISPER_COMPUTE_TYPE` – default `int8`
-- `PIPER_BIN` – default `piper`
-- `PIPER_VOICE_MODEL` – path to a Piper voice `.onnx`
-
-## Browser test flow
-
-1. Open `http://127.0.0.1:8000` or whichever port you launched.
-2. Click `Start recording`.
-3. Allow microphone access.
-4. Speak.
-5. Click `Stop`.
-6. The app uploads audio, transcribes it, sends it to llama-server, and plays the synthesized response.
-
-## Notes
-
-- The app keeps per-session conversation state in memory using a cookie-backed session id.
-- Generated TTS audio is written to `tts_out/` and served from `/audio/<filename>`.
-- If `llama-server` is not running on port 8080, `/api/health` will report it as unavailable.
+## Troubleshooting
+- **Microphone not working**: Ensure you are using HTTPS or `localhost`. Browsers block mic access on insecure non-local origins.
+- **No TTS output**: Verify `piper` is in your PATH or check the TTS backend setting.
+- **Slow responses**: Use a smaller Whisper model (tiny.en) or enable streaming.
