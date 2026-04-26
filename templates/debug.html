@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Debug - Voice Assistant</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    .debug-grid {
+      display: grid;
+      gap: 16px;
+      padding: 20px;
+    }
+    .status-item {
+      display: flex;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      padding: 8px 0;
+    }
+    .error-list {
+      background: #2a1010;
+      padding: 10px;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 0.85rem;
+    }
+    .test-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1>System Health & Debug</h1>
+        <p>Real-time status of backend components</p>
+      </div>
+    </header>
+
+    <section class="controls">
+      <a href="/" style="color: var(--accent); text-decoration: none;">&larr; Back to Chat</a>
+    </section>
+
+    <section class="message">
+      <div class="debug-grid" id="health-grid">
+        <div class="status-item">
+          <span>Loading health data...</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="message">
+      <h3>Recent Errors</h3>
+      <div class="error-list" id="error-list">No errors logged.</div>
+    </section>
+
+    <section class="controls test-actions">
+        <button id="test-tts">Test TTS</button>
+        <button id="test-llama">Test Llama</button>
+    </section>
+  </main>
+
+  <script>
+    async function refreshHealth() {
+      try {
+        const res = await fetch('/api/health');
+        const data = await res.json();
+        const grid = document.getElementById('health-grid');
+        grid.innerHTML = `
+          <div class="status-item"><span>Llama Server</span> <span>${data.llama.ok ? '✅ OK' : '❌ ' + (data.llama.error || 'Down')}</span></div>
+          <div class="status-item"><span>Whisper</span> <span>${data.whisper.model} (${data.whisper.device})</span></div>
+          <div class="status-item"><span>TTS Backend</span> <span>${data.tts.backend || 'None'}</span></div>
+        `;
+        
+        const errList = document.getElementById('error-list');
+        if (data.errors && data.errors.length) {
+            errList.innerHTML = data.errors.map(e => `[${new Date(e.time*1000).toLocaleTimeString()}] ${e.msg}`).join('<br>');
+        } else {
+            errList.innerText = 'No errors logged.';
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    document.getElementById('test-tts').onclick = async () => {
+        alert('Synthesizing "Test audio check"...');
+        // We don't have a direct test-tts endpoint yet, but we could add one or just use the main flow
+    };
+
+    setInterval(refreshHealth, 5000);
+    refreshHealth();
+  </script>
+</body>
+</html>

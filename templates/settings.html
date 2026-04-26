@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Settings - Voice Assistant</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    .settings-grid {
+      display: grid;
+      gap: 20px;
+      padding: 20px;
+    }
+    .setting-item {
+      display: grid;
+      gap: 6px;
+    }
+    label {
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+    input, select, textarea {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px;
+      border-radius: 8px;
+      width: 100%;
+    }
+    .back-link {
+      display: inline-block;
+      margin-bottom: 20px;
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .actions {
+      margin-top: 20px;
+      display: flex;
+      gap: 10px;
+    }
+  </style>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1>Settings</h1>
+        <p>Configure your offline voice assistant</p>
+      </div>
+    </header>
+
+    <section class="controls">
+      <a href="/" class="back-link">&larr; Back to Chat</a>
+    </section>
+
+    <section class="message">
+      <form id="settings-form" class="settings-grid">
+        <div class="setting-item">
+          <label>Llama Chat URL</label>
+          <input type="text" name="llama_chat_url">
+        </div>
+        <div class="setting-item">
+          <label>Llama Health URL</label>
+          <input type="text" name="llama_health_url">
+        </div>
+        <div class="setting-item">
+          <label>Model Name</label>
+          <input type="text" name="llama_model">
+        </div>
+        <div class="setting-item">
+          <label>System Prompt</label>
+          <textarea name="system_prompt" rows="3"></textarea>
+        </div>
+        <div class="setting-item">
+          <label>Whisper Model</label>
+          <select name="whisper_model">
+            <option value="tiny.en">tiny.en</option>
+            <option value="base.en">base.en</option>
+            <option value="small.en">small.en</option>
+            <option value="medium.en">medium.en</option>
+            <option value="large-v3">large-v3</option>
+          </select>
+        </div>
+        <div class="setting-item">
+          <label>Whisper Device</label>
+          <input type="text" name="whisper_device" placeholder="cpu or cuda">
+        </div>
+        <div class="setting-item">
+          <label>TTS Backend</label>
+          <select name="tts_backend">
+            <option value="auto">Auto</option>
+            <option value="piper">Piper</option>
+            <option value="espeak-ng">Espeak-ng</option>
+            <option value="espeak">Espeak</option>
+          </select>
+        </div>
+        <div class="setting-item">
+            <label>Wake Phrase</label>
+            <input type="text" name="wake_phrase">
+        </div>
+        <div class="setting-item">
+            <label>Push-to-talk Key</label>
+            <input type="text" name="push_to_talk_key" placeholder="Space or any key">
+        </div>
+        <div class="setting-item">
+            <label>Max History Messages</label>
+            <input type="number" name="max_history_messages">
+        </div>
+        <div class="setting-item">
+            <label>HTTP Timeout (seconds)</label>
+            <input type="number" name="http_timeout">
+        </div>
+        
+        <div class="actions">
+          <button type="submit" class="primary">Save Settings</button>
+          <button type="button" id="reset-btn">Reset to Default</button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById('settings-form');
+    const resetBtn = document.getElementById('reset-btn');
+
+    async function loadConfig() {
+      const res = await fetch('/api/config');
+      const config = await res.json();
+      for (const [key, val] of Object.entries(config)) {
+        const input = form.elements[key];
+        if (input) input.value = val;
+      }
+    }
+
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const formData = new FormData(form);
+      const data = Object.fromEntries(formData.entries());
+      
+      // Convert numeric fields
+      const numFields = ['max_history_messages', 'http_timeout', 'port'];
+      numFields.forEach(f => { if(data[f]) data[f] = Number(data[f]); });
+
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (res.ok) alert('Settings saved!');
+    };
+
+    loadConfig();
+  </script>
+</body>
+</html>
