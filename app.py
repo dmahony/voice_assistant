@@ -8,59 +8,56 @@ import subprocess
 import threading
 import time
 import uuid
+import re
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncGenerator
 
 import requests
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Request, UploadFile, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+from config import config
+from db import save_message, get_messages, clear_session_messages, ensure_session
+from tools import call_tool
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 TEMP_DIR = BASE_DIR / "temp"
 TTS_DIR = BASE_DIR / "tts_out"
+TTS_CACHE_DIR = BASE_DIR / "tts_cache"
+
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 TTS_DIR.mkdir(parents=True, exist_ok=True)
+TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-LLAMA_CHAT_URL = os.environ.get("LLAMA_CHAT_URL", "http://127.0.0.1:8080/v1/chat/completions")
-LLAMA_HEALTH_URL = os.environ.get("LLAMA_HEALTH_URL", "http://127.0.0.1:8080/health")
-LLAMA_MODEL = os.environ.get("LLAMA_MODEL", "")
-SYSTEM_PROMPT = os.environ.get(
-    "VOICE_ASSISTANT_SYSTEM_PROMPT",
-    "You are a concise offline voice assistant. Reply conversationally, naturally, and briefly.",
-)
-WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "base.en")
-WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")
-WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
-WHISPER_DOWNLOAD_ROOT = os.environ.get("WHISPER_DOWNLOAD_ROOT")
-PIPER_BIN = os.environ.get("PIPER_BIN", "piper")
-PIPER_VOICE_MODEL = os.environ.get("PIPER_VOICE_MODEL", "")
-MAX_HISTORY_MESSAGES = int(os.environ.get("MAX_HISTORY_MESSAGES", "12"))
-HTTP_TIMEOUT = float(os.environ.get("LLAMA_TIMEOUT", "120"))
-
-app = FastAPI(title="Offline Voice Assistant", version="1.0.0")
+app = FastAPI(title="Offline Voice Assistant", version="1.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1", "http://localhost", "http://127.0.0.1:8000", "http://localhost:8000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/audio", StaticFiles(directory=str(TTS_DIR)), name="audio")
+app.mount("/cache", StaticFiles(directory=str(TTS_CACHE_DIR)), name="cache")
 
-_session_lock = threading.Lock()
-_sessions: dict[str, dict[str, Any]] = {}
 _whisper_lock = threading.Lock()
 _whisper_model = None
 
+# Track recent errors for health page
+_recent_errors = []
+
+def _log_error(msg):
+    _recent_errors.append({"time": time.time(), "msg": msg})
+    if len(_recent_errors) > 20:
+        _recent_errors.pop(0)
 
 def _new_session_id() -> str:
     return secrets.token_urlsafe(18)
-
 
 def _get_or_create_session_id(request: Request) -> tuple[str, bool]:
     sid = request.cookies.get("voice_session_id")
@@ -68,28 +65,16 @@ def _get_or_create_session_id(request: Request) -> tuple[str, bool]:
         return sid, False
     return _new_session_id(), True
 
-
-def _ensure_session(session_id: str) -> dict[str, Any]:
-    with _session_lock:
-        if session_id not in _sessions:
-            _sessions[session_id] = {
-                "messages": [{"role": "system", "content": SYSTEM_PROMPT}],
-                "created_at": time.time(),
-                "last_seen": time.time(),
-            }
-        _sessions[session_id]["last_seen"] = time.time()
-        return _sessions[session_id]
-
-
 def _trim_history(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    max_hist = config.get("max_history_messages")
+    system_prompt = config.get("system_prompt")
     if not messages:
-        return [{"role": "system", "content": SYSTEM_PROMPT}]
+        return [{"role": "system", "content": system_prompt}]
     system = messages[0]
     tail = messages[1:]
-    if len(tail) <= MAX_HISTORY_MESSAGES:
+    if len(tail) <= max_hist:
         return [system] + tail
-    return [system] + tail[-MAX_HISTORY_MESSAGES:]
-
+    return [system] + tail[-max_hist:]
 
 def _load_whisper_model():
     global _whisper_model
@@ -99,77 +84,36 @@ def _load_whisper_model():
         if _whisper_model is not None:
             return _whisper_model
         from faster_whisper import WhisperModel
-
-        kwargs: dict[str, Any] = {
-            "device": WHISPER_DEVICE,
-            "compute_type": WHISPER_COMPUTE_TYPE,
-        }
-        if WHISPER_DOWNLOAD_ROOT:
-            kwargs["download_root"] = WHISPER_DOWNLOAD_ROOT
-        _whisper_model = WhisperModel(WHISPER_MODEL_NAME, **kwargs)
+        try:
+            _whisper_model = WhisperModel(
+                config.get("whisper_model"),
+                device=config.get("whisper_device"),
+                compute_type=config.get("whisper_compute_type")
+            )
+        except Exception as e:
+            _log_error(f"Whisper load failed: {e}")
+            raise
         return _whisper_model
-
 
 def _convert_to_wav(input_path: Path) -> Path:
     output_path = input_path.with_suffix(".wav")
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(input_path),
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-vn",
-        str(output_path),
-    ]
+    cmd = ["ffmpeg", "-y", "-i", str(input_path), "-ac", "1", "-ar", "16000", "-vn", str(output_path)]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return output_path
-
 
 def _transcribe_audio(audio_path: Path) -> str:
     wav_path = _convert_to_wav(audio_path)
     model = _load_whisper_model()
-    segments, info = model.transcribe(
-        str(wav_path),
-        language="en",
-        vad_filter=True,
-        beam_size=1,
-    )
-    text_parts: list[str] = []
-    for segment in segments:
-        piece = (segment.text or "").strip()
-        if piece:
-            text_parts.append(piece)
-    transcript = " ".join(text_parts).strip()
+    segments, _ = model.transcribe(str(wav_path), language="en", vad_filter=True, beam_size=1)
+    transcript = " ".join([s.text.strip() for s in segments if s.text]).strip()
     return transcript
 
-
-def _call_llama_server(messages: list[dict[str, str]]) -> str:
-    payload: dict[str, Any] = {
-        "messages": messages,
-        "temperature": 0.4,
-        "stream": False,
-    }
-    if LLAMA_MODEL:
-        payload["model"] = LLAMA_MODEL
-    response = requests.post(LLAMA_CHAT_URL, json=payload, timeout=HTTP_TIMEOUT)
-    response.raise_for_status()
-    data = response.json()
-    choices = data.get("choices", [])
-    if not choices:
-        raise RuntimeError(f"llama-server returned no choices: {json.dumps(data)[:500]}")
-    message = choices[0].get("message", {})
-    reply = (message.get("content") or "").strip()
-    if not reply:
-        raise RuntimeError("llama-server returned an empty assistant reply")
-    return reply
-
-
 def _find_tts_backend() -> str | None:
-    piper_ok = shutil.which(PIPER_BIN) is not None and (not PIPER_VOICE_MODEL or Path(PIPER_VOICE_MODEL).exists())
-    if piper_ok:
+    pref = config.get("tts_backend")
+    if pref != "auto":
+        return pref
+    
+    if shutil.which(config.get("piper_bin")):
         return "piper"
     if shutil.which("espeak-ng"):
         return "espeak-ng"
@@ -177,186 +121,223 @@ def _find_tts_backend() -> str | None:
         return "espeak"
     return None
 
+def _synthesize_speech(text: str, session_id: str, cache=False) -> Path:
+    if not text.strip(): return None
+    
+    # Simple caching for repeated short phrases
+    clean_text = re.sub(r'[^a-z0-9]', '', text.lower())
+    cache_file = TTS_CACHE_DIR / f"{clean_text[:50]}.wav"
+    if cache and cache_file.exists():
+        return cache_file
 
-def _synthesize_speech(text: str, session_id: str) -> Path:
     out_file = TTS_DIR / f"{session_id}_{uuid.uuid4().hex}.wav"
     backend = _find_tts_backend()
-    if backend == "piper":
-        cmd = [PIPER_BIN, "--output_file", str(out_file)]
-        if PIPER_VOICE_MODEL:
-            cmd[1:1] = ["--model", PIPER_VOICE_MODEL]
-        subprocess.run(
-            cmd,
-            input=text.encode("utf-8"),
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=120,
-        )
+    try:
+        if backend == "piper":
+            cmd = [config.get("piper_bin"), "--output_file", str(out_file)]
+            model = config.get("piper_voice_model")
+            if model: cmd.extend(["--model", model])
+            subprocess.run(cmd, input=text.encode("utf-8"), check=True, capture_output=True, timeout=120)
+        elif backend in {"espeak", "espeak-ng"}:
+            subprocess.run([backend, "-w", str(out_file), text], check=True, capture_output=True, timeout=60)
+        else:
+            raise RuntimeError("No TTS backend")
+        
+        if cache:
+            shutil.copy(out_file, cache_file)
         return out_file
-    if backend in {"espeak", "espeak-ng"}:
-        cmd = [backend, "-w", str(out_file), text]
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
-        return out_file
-    raise RuntimeError(
-        "No offline TTS backend found. Install Piper (preferred) or espeak/espeak-ng."
-    )
+    except Exception as e:
+        _log_error(f"TTS failed: {e}")
+        return None
 
-
-def _chat_with_session(session_id: str, transcript: str) -> dict[str, str | None]:
-    session = _ensure_session(session_id)
-    messages = list(session["messages"])
-    messages.append({"role": "user", "content": transcript})
-    messages = _trim_history(messages)
-    assistant_reply = _call_llama_server(messages)
-    messages.append({"role": "assistant", "content": assistant_reply})
-    with _session_lock:
-        session["messages"] = messages
-    audio_path = _synthesize_speech(assistant_reply, session_id)
-    return {
-        "transcript": transcript,
-        "assistant_reply": assistant_reply,
-        "audio_url": f"/audio/{audio_path.name}",
-        "session_id": session_id,
-    }
-
+def _cleanup_old_files():
+    # Cleanup temp and tts_out older than 1 hour
+    now = time.time()
+    for d in [TEMP_DIR, TTS_DIR]:
+        for f in d.iterdir():
+            if f.is_file() and now - f.stat().st_mtime > 3600:
+                try: f.unlink()
+                except: pass
 
 @app.get("/")
 def index(request: Request):
-    file_path = TEMPLATES_DIR / "index.html"
-    response = FileResponse(str(file_path), media_type="text/html")
     session_id, is_new = _get_or_create_session_id(request)
-    _ensure_session(session_id)
+    ensure_session(session_id)
+    response = FileResponse(str(TEMPLATES_DIR / "index.html"))
     if is_new:
-        response.set_cookie(
-            key="voice_session_id",
-            value=session_id,
-            httponly=True,
-            samesite="lax",
-            max_age=60 * 60 * 24 * 30,
-        )
+        response.set_cookie("voice_session_id", session_id, httponly=True, max_age=2592000)
     return response
 
+@app.get("/settings")
+def settings_page():
+    return FileResponse(str(TEMPLATES_DIR / "settings.html"))
+
+@app.get("/debug")
+def debug_page():
+    return FileResponse(str(TEMPLATES_DIR / "debug.html"))
+
+@app.get("/api/config")
+def get_config():
+    return config.to_dict()
+
+@app.post("/api/config")
+async def update_config(req: Request):
+    data = await req.json()
+    for k, v in data.items():
+        config.set(k, v)
+    return {"ok": True}
 
 @app.get("/api/health")
 def health():
-    llama_status = {
-        "ok": False,
-        "error": None,
-    }
+    llama_status = {"ok": False, "error": None}
     try:
-        r = requests.get(LLAMA_HEALTH_URL, timeout=5)
+        r = requests.get(config.get("llama_health_url"), timeout=2)
         llama_status["ok"] = r.ok
-        if not r.ok:
-            llama_status["error"] = f"HTTP {r.status_code}"
-    except Exception as exc:
-        llama_status["error"] = str(exc)
+    except Exception as e:
+        llama_status["error"] = str(e)
+    
     return {
         "ok": True,
-        "llama_server": llama_status,
-        "whisper_model": WHISPER_MODEL_NAME,
-        "tts_backend": _find_tts_backend(),
+        "llama": llama_status,
+        "whisper": {"model": config.get("whisper_model"), "device": config.get("whisper_device")},
+        "tts": {"backend": _find_tts_backend()},
+        "errors": _recent_errors[-5:]
     }
 
+@app.post("/api/clear")
+def api_clear(request: Request):
+    sid, _ = _get_or_create_session_id(request)
+    clear_session_messages(sid)
+    return {"ok": True}
+
+async def _stream_llama(messages: list[dict[str, str]], session_id: str, transcript: str):
+    # Send transcript first
+    yield json.dumps({"type": "transcript", "text": transcript}) + "\n"
+
+    payload = {
+        "messages": messages,
+        "temperature": 0.4,
+        "stream": True,
+        "model": config.get("llama_model")
+    }
+    
+    full_response = ""
+    sentence_buffer = ""
+    
+    try:
+        r = requests.post(config.get("llama_chat_url"), json=payload, stream=True, timeout=config.get("http_timeout"))
+        r.raise_for_status()
+        
+        for line in r.iter_lines():
+            if not line: continue
+            line = line.decode("utf-8")
+            if line.startswith("data: "):
+                data_str = line[6:]
+                if data_str == "[DONE]": break
+                try:
+                    data = json.loads(data_str)
+                    token = data["choices"][0]["delta"].get("content", "")
+                    if token:
+                        full_response += token
+                        sentence_buffer += token
+                        
+                        # Check for sentence completion
+                        if any(c in token for c in ".!?\n"):
+                            sentences = re.split(r'(?<=[.!?\n])\s+', sentence_buffer)
+                            if len(sentences) > 1:
+                                for s in sentences[:-1]:
+                                    if s.strip():
+                                        audio_path = _synthesize_speech(s.strip(), session_id)
+                                        yield json.dumps({
+                                            "type": "sentence",
+                                            "text": s.strip(),
+                                            "audio_url": f"/audio/{audio_path.name}" if audio_path else None
+                                        }) + "\n"
+                                sentence_buffer = sentences[-1]
+                        
+                        yield json.dumps({"type": "token", "text": token}) + "\n"
+                except: continue
+        
+        if sentence_buffer.strip():
+            audio_path = _synthesize_speech(sentence_buffer.strip(), session_id)
+            yield json.dumps({
+                "type": "sentence", 
+                "text": sentence_buffer.strip(),
+                "audio_url": f"/audio/{audio_path.name}" if audio_path else None
+            }) + "\n"
+            
+        save_message(session_id, "assistant", full_response)
+        
+        # Check for tool usage in full response (simple JSON detection)
+        tool_match = re.search(r'\{"tool":\s*"([^"]+)"\}', full_response)
+        if tool_match:
+            tool_name = tool_match.group(1)
+            tool_res = call_tool(tool_name)
+            yield json.dumps({"type": "tool_result", "tool": tool_name, "result": tool_res}) + "\n"
+            # Optionally speak tool result? Let's just send it as text for now.
+
+    except Exception as e:
+        _log_error(f"Streaming failed: {e}")
+        yield json.dumps({"type": "error", "text": str(e)}) + "\n"
 
 @app.post("/api/chat")
-async def api_chat(request: Request, audio: UploadFile = File(...)):
-    session_id, is_new = _get_or_create_session_id(request)
-    _ensure_session(session_id)
+async def api_chat(request: Request, bg_tasks: BackgroundTasks, audio: UploadFile = File(...)):
+    sid, is_new = _get_or_create_session_id(request)
+    ensure_session(sid)
+    bg_tasks.add_task(_cleanup_old_files)
 
-    suffix = Path(audio.filename or "recording.webm").suffix or ".webm"
-    input_path = TEMP_DIR / f"{session_id}_{uuid.uuid4().hex}{suffix}"
-    with input_path.open("wb") as f:
-        f.write(await audio.read())
+    suffix = Path(audio.filename or "rec.webm").suffix or ".webm"
+    tmp_path = TEMP_DIR / f"{sid}_{uuid.uuid4().hex}{suffix}"
+    with tmp_path.open("wb") as f: f.write(await audio.read())
 
     try:
-        transcript = _transcribe_audio(input_path)
+        transcript = _transcribe_audio(tmp_path)
         if not transcript:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "ok": False,
-                    "error": "No speech detected. Try again with a louder recording.",
-                    "session_id": session_id,
-                },
-            )
-        result = _chat_with_session(session_id, transcript)
-        payload = {
-            "ok": True,
-            "transcript": result["transcript"],
-            "assistant_reply": result["assistant_reply"],
-            "audio_url": result["audio_url"],
-            "session_id": result["session_id"],
-        }
-        response = JSONResponse(payload)
-        if is_new:
-            response.set_cookie(
-                key="voice_session_id",
-                value=session_id,
-                httponly=True,
-                samesite="lax",
-                max_age=60 * 60 * 24 * 30,
-            )
-        return response
-    except subprocess.CalledProcessError as exc:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "ok": False,
-                "error": f"Audio conversion or TTS failed: {exc}",
-                "session_id": session_id,
-            },
-        )
-    except requests.HTTPError as exc:
-        return JSONResponse(
-            status_code=502,
-            content={
-                "ok": False,
-                "error": f"llama-server error: {exc}",
-                "session_id": session_id,
-            },
-        )
-    except Exception as exc:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "ok": False,
-                "error": str(exc),
-                "session_id": session_id,
-            },
-        )
+            return JSONResponse({"ok": False, "error": "No speech detected"}, status_code=400)
+        
+        # Wake word check
+        wake_phrase = config.get("wake_phrase")
+        if wake_phrase:
+            if not transcript.lower().strip().startswith(wake_phrase.lower()):
+                return Response(status_code=204)
+            else:
+                # Remove wake phrase from transcript for cleaner chat
+                transcript = transcript[len(wake_phrase):].strip()
+                if not transcript:
+                    # Just the wake word was said, maybe reply with "Yes?"
+                    transcript = "Hello" # Placeholder or just return
+        
+        save_message(sid, "user", transcript)
+        history = _trim_history(get_messages(sid))
+        
+        if config.get("llama_stream"):
+            return StreamingResponse(_stream_llama(history, sid, transcript), media_type="text/event-stream")
+        else:
+            # Fallback non-streaming
+            payload = {"messages": history, "temperature": 0.4, "stream": False, "model": config.get("llama_model")}
+            r = requests.post(config.get("llama_chat_url"), json=payload, timeout=config.get("http_timeout"))
+            r.raise_for_status()
+            reply = r.json()["choices"][0]["message"]["content"].strip()
+            save_message(sid, "assistant", reply)
+            audio_path = _synthesize_speech(reply, sid)
+            return {
+                "ok": True, "transcript": transcript, "assistant_reply": reply,
+                "audio_url": f"/audio/{audio_path.name}" if audio_path else None
+            }
+    except Exception as e:
+        _log_error(f"Chat failed: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     finally:
-        for path in (input_path, input_path.with_suffix(".wav")):
-            try:
-                if path.exists():
-                    path.unlink()
-            except Exception:
-                pass
-
+        if tmp_path.exists(): tmp_path.unlink()
+        wav = tmp_path.with_suffix(".wav")
+        if wav.exists(): wav.unlink()
 
 @app.get("/api/session")
 def api_session(request: Request):
-    session_id, is_new = _get_or_create_session_id(request)
-    session = _ensure_session(session_id)
-    response = JSONResponse(
-        {
-            "ok": True,
-            "session_id": session_id,
-            "messages": session["messages"],
-        }
-    )
-    if is_new:
-        response.set_cookie(
-            key="voice_session_id",
-            value=session_id,
-            httponly=True,
-            samesite="lax",
-            max_age=60 * 60 * 24 * 30,
-        )
-    return response
-
+    sid, is_new = _get_or_create_session_id(request)
+    ensure_session(sid)
+    return {"ok": True, "session_id": sid, "messages": get_messages(sid)}
 
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run("app:app", host="127.0.0.1", port=int(os.environ.get("PORT", "8000")), reload=False)
+    uvicorn.run("app:app", host="0.0.0.0", port=config.get("port"), reload=False)
