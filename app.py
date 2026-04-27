@@ -104,8 +104,19 @@ def _convert_to_wav(input_path: Path) -> Path:
     else:
         output_path = input_path.with_suffix(".wav")
 
+    # Get ffmpeg path (check bundled binary first on Windows)
+    from config import IS_WINDOWS, APP_BASE_DIR
+    if IS_WINDOWS:
+        bundled_ffmpeg = APP_BASE_DIR / "bin" / "windows" / "ffmpeg.exe"
+        if bundled_ffmpeg.exists():
+            ffmpeg_cmd = str(bundled_ffmpeg)
+        else:
+            ffmpeg_cmd = "ffmpeg"
+    else:
+        ffmpeg_cmd = "ffmpeg"
+
     cmd = [
-        "ffmpeg",
+        ffmpeg_cmd,
         "-y",
         "-i",
         str(input_path),

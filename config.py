@@ -1,9 +1,51 @@
 import os
 import json
+import sys
+import shutil
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "config.local.json"
+
+# Detect if running on Windows
+IS_WINDOWS = sys.platform == "win32" or os.name == "nt"
+
+# Detect if running as PyInstaller bundle
+IS_FROZEN = getattr(sys, 'frozen', False)
+
+if IS_FROZEN:
+    # Running as PyInstaller bundle
+    APP_BASE_DIR = Path(sys.executable).parent
+else:
+    # Running from source
+    APP_BASE_DIR = BASE_DIR
+
+# Platform-specific binary paths
+def get_bin_path(binary_name: str) -> str:
+    """Get the path to a binary, checking bundled binaries first."""
+    if IS_WINDOWS:
+        # Check bundled binaries first
+        bundled_bin = APP_BASE_DIR / "bin" / "windows" / f"{binary_name}.exe"
+        if bundled_bin.exists():
+            return str(bundled_bin)
+
+    # Fall back to system PATH
+    return binary_name
+
+# Default model paths (relative to app directory)
+def get_default_piper_model() -> str:
+    """Get default Piper model path."""
+    # Check for bundled model first
+    bundled_model = APP_BASE_DIR / "models" / "piper" / "en-us-lessac-medium.onnx"
+    if bundled_model.exists():
+        return str(bundled_model)
+
+    # Check Linux path for backward compatibility
+    linux_path = "/home/dan/models/piper/en-us-lessac-medium.onnx"
+    if os.path.exists(linux_path):
+        return linux_path
+
+    return ""
 
 DEFAULT_CONFIG = {
     "llama_chat_url": "http://127.0.0.1:8080/v1/chat/completions",
@@ -14,11 +56,8 @@ DEFAULT_CONFIG = {
     "whisper_model": "base.en",
     "whisper_device": "cpu",
     "whisper_compute_type": "int8",
-    "piper_bin": "piper",
-    "piper_voice_model": os.environ.get(
-        "PIPER_VOICE_MODEL",
-        "/home/dan/models/piper/en-us-lessac-medium.onnx" if os.path.exists("/home/dan/models/piper/en-us-lessac-medium.onnx") else "",
-    ),
+    "piper_bin": get_bin_path("piper"),
+    "piper_voice_model": os.environ.get("PIPER_VOICE_MODEL", get_default_piper_model()),
     "tts_backend": "auto",  # auto, piper, espeak-ng, espeak
     "xtts_server_url": "http://127.0.0.1:8020",
     "max_history_messages": 12,
@@ -29,8 +68,6 @@ DEFAULT_CONFIG = {
     "port": 8000,
     "xtts_max_chars": 220,
     "xtts_timeout_seconds": 25,
-    "xtts_timeout_seconds": 25
-
 }
 
 class Config:

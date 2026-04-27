@@ -7,3 +7,15 @@ tts_out/
 whisper_cache/
 models/
 .DS_Store
+
+# Windows binaries (too large for git)
+bin/windows/*.exe
+!bin/windows/*.exe.placeholder
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
+# Windows-specific
+Thumbs.db

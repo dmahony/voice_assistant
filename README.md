@@ -22,6 +22,8 @@ A browser-based voice assistant that runs entirely locally.
 
 ## Installation
 
+### Linux / macOS
+
 1. **Clone the repo**:
    ```bash
    git clone https://github.com/dmahony/voice_assistant.git
@@ -43,6 +45,25 @@ A browser-based voice assistant that runs entirely locally.
    ```bash
    python app.py
    ```
+
+### Windows
+
+See [windows/README_WINDOWS.md](windows/README_WINDOWS.md) for detailed Windows setup instructions.
+
+Quick start:
+```cmd
+git clone https://github.com/dmahony/voice_assistant.git
+cd voice_assistant
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python windows\run_windows.py
+```
+
+The Windows launcher will:
+- Automatically start llama-server.exe if present
+- Open your browser to http://127.0.0.1:8000
+- Use bundled binaries from `bin/windows/` if available
 
 ## Configuration
 Settings can be changed in the UI under the "Settings" page or via `config.local.json`.
