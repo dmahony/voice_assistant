@@ -22,6 +22,22 @@ def main() -> int:
     if not speaker_wav.exists():
         raise SystemExit(f"Speaker wav not found: {speaker_wav}")
 
+    # PyTorch 2.6+ defaults to weights_only=True in torch.load, which breaks
+    # Coqui/TTS checkpoints that contain custom config objects.
+    # Force weights_only=False for this process.
+    try:
+        import torch
+
+        _orig_torch_load = torch.load
+
+        def _torch_load_weights_only_false(*args, **kwargs):
+            kwargs.setdefault("weights_only", False)
+            return _orig_torch_load(*args, **kwargs)
+
+        torch.load = _torch_load_weights_only_false  # type: ignore[assignment]
+    except Exception:
+        pass
+
     try:
         from TTS.api import TTS
     except Exception as exc:
@@ -39,3 +55,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

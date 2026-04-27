@@ -96,9 +96,33 @@ def _load_whisper_model():
         return _whisper_model
 
 def _convert_to_wav(input_path: Path) -> Path:
-    output_path = input_path.with_suffix(".wav")
-    cmd = ["ffmpeg", "-y", "-i", str(input_path), "-ac", "1", "-ar", "16000", "-vn", str(output_path)]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # If the upload is already a WAV, avoid writing to the same path.
+    # Otherwise ffmpeg can fail when input==output.
+    if input_path.suffix.lower() == ".wav":
+        output_path = input_path.with_name(input_path.stem + "_16000.wav")
+    else:
+        output_path = input_path.with_suffix(".wav")
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-vn",
+        str(output_path),
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or b"").decode("utf-8", errors="replace").strip()
+        stdout = (exc.stdout or b"").decode("utf-8", errors="replace").strip()
+        details = stderr or stdout or str(exc)
+        raise RuntimeError(f"ffmpeg failed to convert audio: {details}") from exc
+
     return output_path
 
 def _transcribe_audio(audio_path: Path) -> str:
