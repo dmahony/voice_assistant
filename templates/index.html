@@ -5,83 +5,78 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Offline Voice Assistant</title>
   <link rel="stylesheet" href="/static/style.css" />
-  <style>
-    .hands-free-toggle {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 0.9rem;
-        color: var(--muted);
-    }
-    input[type="checkbox"] {
-        width: 18px;
-        height: 18px;
-        cursor: pointer;
-    }
-    .nav-links {
-        display: flex;
-        gap: 12px;
-    }
-    .nav-links a {
-        color: var(--muted);
-        text-decoration: none;
-        font-size: 0.85rem;
-    }
-    .nav-links a:hover {
-        color: var(--accent);
-    }
-    .visualizer {
-        height: 4px;
-        background: var(--panel-2);
-        border-radius: 2px;
-        overflow: hidden;
-        margin-top: 8px;
-    }
-    #volume-bar {
-        height: 100%;
-        width: 0%;
-        background: var(--accent-2);
-        transition: width 0.1s ease;
-    }
-  </style>
 </head>
 <body>
   <main class="app-shell">
     <header class="topbar">
-      <div>
+      <div class="brand-block">
+        <p class="eyebrow">offline • local-first • private</p>
         <h1>Offline Voice Assistant</h1>
-        <div class="nav-links">
-            <a href="/settings">Settings</a>
-            <a href="/debug">Debug</a>
+        <p class="lede">Browser mic → local STT → local llama-server → local TTS</p>
+        <div class="feature-chips" aria-label="Highlights">
+          <span>Conversation-first</span>
+          <span>Voice profiles</span>
+          <span>LAN ready</span>
         </div>
+        <p id="connection-note" class="connection-note"></p>
       </div>
-      <div class="status-pill" id="status-pill">idle</div>
+      <div class="status-stack">
+        <div class="status-pill" id="status-pill">idle</div>
+        <div class="status-meta">Local mode.</div>
+      </div>
     </header>
 
     <section class="controls">
       <button id="start-btn" class="primary">Start recording</button>
       <button id="stop-btn" disabled>Stop</button>
       <button id="clear-btn" class="ghost">Clear chat</button>
-      
-      <div class="hands-free-toggle">
-        <input type="checkbox" id="hands-free-mode">
-        <label for="hands-free-mode">Hands-free / VAD</label>
+    </section>
+
+    <section class="voice-panel">
+      <div class="voice-panel-head">
+        <div>
+          <h2>Voice clone</h2>
+          <p>Record a sample, name it, and save it as a selectable XTTS speaker profile.</p>
+        </div>
       </div>
-      
-      <div id="vad-indicator" style="display:none; width: 100%;">
-          <div class="visualizer"><div id="volume-bar"></div></div>
+
+      <div class="voice-form">
+        <input id="voice-name" type="text" maxlength="64" placeholder="Voice name" />
+        <button id="voice-start-btn" class="primary">Record sample</button>
+        <button id="voice-stop-btn" disabled>Stop & save</button>
       </div>
+
+      <div class="voice-upload-row">
+        <input id="voice-file" class="voice-file-input" type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.webm,.flac,.aac,.opus" />
+        <button id="voice-upload-btn">Upload file</button>
+      </div>
+
+      <div class="voice-note">
+        Use a clean 10–30 second recording or upload an audio file. Any supported audio format will be converted to 24 kHz mono WAV for XTTS.
+      </div>
+
+      <div id="voice-list" class="voice-list"></div>
     </section>
 
     <section class="status-line">
       <strong>Status:</strong> <span id="status-text">Ready.</span>
     </section>
 
-    <section class="chat" id="chat"></section>
+    <section class="chat" id="chat">
+      <article class="chat-empty" id="chat-empty">
+        <h2>Ready to listen</h2>
+        <p>Press Start recording, speak naturally, and the assistant will reply locally.</p>
+        <div class="chat-empty-actions">
+          <span>1. Record</span>
+          <span>2. Transcribe</span>
+          <span>3. Reply + play</span>
+        </div>
+      </article>
+    </section>
 
     <section class="debug-panel">
       <label for="audio-player">Audio playback</label>
-      <audio id="audio-player" controls></audio>
+      <audio id="audio-player" controls playsinline></audio>
     </section>
   </main>
 

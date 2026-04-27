@@ -1,3 +1,5 @@
 {
-  "llama_stream": true
+  "llama_stream": false,
+  "wake_phrase": "",
+  "xtts_timeout_seconds": 60
 }

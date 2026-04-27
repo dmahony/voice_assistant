@@ -15,7 +15,10 @@ DEFAULT_CONFIG = {
     "whisper_device": "cpu",
     "whisper_compute_type": "int8",
     "piper_bin": "piper",
-    "piper_voice_model": "",
+    "piper_voice_model": os.environ.get(
+        "PIPER_VOICE_MODEL",
+        "/home/dan/models/piper/en-us-lessac-medium.onnx" if os.path.exists("/home/dan/models/piper/en-us-lessac-medium.onnx") else "",
+    ),
     "tts_backend": "auto",  # auto, piper, espeak-ng, espeak
     "xtts_server_url": "http://127.0.0.1:8020",
     "max_history_messages": 12,
@@ -23,7 +26,11 @@ DEFAULT_CONFIG = {
     "wake_phrase": "computer",
     "push_to_talk_key": " ",
     "http_timeout": 120,
-    "port": 8000
+    "port": 8000,
+    "xtts_max_chars": 220,
+    "xtts_timeout_seconds": 25,
+    "xtts_timeout_seconds": 25
+
 }
 
 class Config:

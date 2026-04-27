@@ -110,12 +110,21 @@ source "$MAIN_VENV/bin/activate"
 
 # Stop any previous listener on $PORT (best-effort)
 # (We avoid killing other services unless they are on the exact port.)
-pids=$(ss -ltnp 2>/dev/null | awk -v p=":$PORT" '$4 ~ p"$" {print $NF}' | sed -E 's/.*pid=([0-9]+).*/\1/' | sort -u || true)
+# Extract PIDs from ss output robustly.
+pids=$(ss -ltnp 2>/dev/null | awk -v port=":$PORT" '$4 ~ port { if (match($0, /pid=([0-9]+)/, a)) print a[1] }' | sort -u || true)
 if [ -n "${pids:-}" ]; then
   for pid in $pids; do
-    kill "$pid" >/dev/null 2>&1 || true
+    kill -9 "$pid" >/dev/null 2>&1 || true
   done
 fi
+
+# Wait briefly for the port to be released.
+for _ in {1..10}; do
+  if ! ss -ltnp 2>/dev/null | grep -q ":$PORT\b"; then
+    break
+  fi
+  sleep 0.2
+done
 
 DISABLE_TLS="$DISABLE_TLS" \
 PORT="$PORT" \
@@ -130,10 +139,21 @@ log "Voice assistant started. Logs: /tmp/voice_assistant_app.log"
 
 log "==> Waiting for app /api/health"
 end=$((SECONDS + WAIT_TIMEOUT_SECONDS))
+if [ "$DISABLE_TLS" = "1" ]; then
+  HEALTH_URL="http://127.0.0.1:$PORT/api/health"
+  CURL_ARGS=()
+else
+  HEALTH_URL="https://127.0.0.1:$PORT/api/health"
+  CURL_ARGS=("-k")
+fi
 while true; do
-  if curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
-    log "App is up: http://127.0.0.1:$PORT/api/health"
-    curl -sS "http://127.0.0.1:$PORT/api/health" | head -c 2000; echo
+  if curl -fsS "${CURL_ARGS[@]}" "$HEALTH_URL" >/dev/null 2>&1; then
+    if [ "$DISABLE_TLS" = "1" ]; then
+      log "App is up: http://127.0.0.1:$PORT/api/health"
+    else
+      log "App is up: https://127.0.0.1:$PORT/api/health"
+    fi
+    curl -sS "${CURL_ARGS[@]}" "$HEALTH_URL" | head -c 2000; echo
     break
   fi
   if [ "$SECONDS" -ge "$end" ]; then

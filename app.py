@@ -15,12 +15,13 @@ from typing import Any, AsyncGenerator
 import requests
 from fastapi import FastAPI, File, Request, UploadFile, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from config import config
 from db import save_message, get_messages, clear_session_messages, ensure_session
 from tools import call_tool
+from voice_library import resolve_xtts_speaker_wav
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -133,10 +134,11 @@ def _transcribe_audio(audio_path: Path) -> str:
     return transcript
 
 def _find_tts_backend() -> str | None:
-    pref = config.get("tts_backend")
-    if pref != "auto":
+    # start_voice_assistant.sh sets env var TTS_BACKEND=xtts; config.local.json defaults to 'auto'
+    pref = os.environ.get("TTS_BACKEND") or config.get("tts_backend")
+    if pref and pref != "auto":
         return pref
-    
+
     if shutil.which(config.get("piper_bin")):
         return "piper"
     if shutil.which("espeak-ng"):
@@ -145,9 +147,11 @@ def _find_tts_backend() -> str | None:
         return "espeak"
     return None
 
-def _synthesize_speech(text: str, session_id: str, cache=False) -> Path:
-    if not text.strip(): return None
-    
+
+def _synthesize_speech(text: str, session_id: str, cache: bool = False) -> Path | None:
+    if not text.strip():
+        return None
+
     # Simple caching for repeated short phrases
     clean_text = re.sub(r'[^a-z0-9]', '', text.lower())
     cache_file = TTS_CACHE_DIR / f"{clean_text[:50]}.wav"
@@ -156,20 +160,117 @@ def _synthesize_speech(text: str, session_id: str, cache=False) -> Path:
 
     out_file = TTS_DIR / f"{session_id}_{uuid.uuid4().hex}.wav"
     backend = _find_tts_backend()
+
+    # XTTS speaker reference (prefer chosen voice profile if present)
+    default_speaker_wav = Path(os.environ.get("XTTS_SPEAKER_WAV", "/tmp/other-way.wav"))
+    try:
+        speaker_wav = resolve_xtts_speaker_wav(BASE_DIR, default_speaker_wav)
+    except Exception:
+        speaker_wav = default_speaker_wav
+
     try:
         if backend == "piper":
             cmd = [config.get("piper_bin"), "--output_file", str(out_file)]
             model = config.get("piper_voice_model")
-            if model: cmd.extend(["--model", model])
-            subprocess.run(cmd, input=text.encode("utf-8"), check=True, capture_output=True, timeout=120)
+            if model:
+                cmd.extend(["--model", model])
+            # Some piper builds use --model for the ONNX path.
+            # If piper fails with missing model, we still want to surface that error.
+            subprocess.run(
+                cmd,
+                input=text.encode("utf-8"),
+                check=True,
+                capture_output=True,
+                timeout=120,
+            )
+
         elif backend in {"espeak", "espeak-ng"}:
             subprocess.run([backend, "-w", str(out_file), text], check=True, capture_output=True, timeout=60)
+
+        elif backend == "xtts":
+            # Truncate to keep XTTS fast/stable, especially during long assistant replies.
+            max_chars = int(config.get("xtts_max_chars", 400))
+            if max_chars and len(text) > max_chars:
+                text = text[:max_chars]
+
+            xtts_model_name = os.environ.get(
+                "XTTS_MODEL_NAME", "tts_models/multilingual/multi-dataset/xtts_v2"
+            )
+            xtts_helper = BASE_DIR / "xtts_synth.py"
+            xtts_py = BASE_DIR / "xtts-venv" / "bin" / "python"
+            if not xtts_helper.exists():
+                raise RuntimeError(f"Missing {xtts_helper}")
+            if not xtts_py.exists():
+                raise RuntimeError(f"Missing XTTS venv python: {xtts_py}")
+            if not speaker_wav.exists():
+                raise RuntimeError(f"XTTS speaker wav not found: {speaker_wav}")
+
+            xtts_timeout = int(config.get("xtts_timeout_seconds", 20))
+            xtts_ok = False
+            try:
+                # xtts_synth.py reads text from stdin
+                subprocess.run(
+                    [
+                        str(xtts_py),
+                        str(xtts_helper),
+                        "--model-name",
+                        xtts_model_name,
+                        "--speaker-wav",
+                        str(speaker_wav),
+                        "--language",
+                        "en",
+                        "--output",
+                        str(out_file),
+                    ],
+                    input=text.encode("utf-8"),
+                    check=True,
+                    capture_output=True,
+                    timeout=xtts_timeout,
+                )
+                xtts_ok = True
+            except subprocess.TimeoutExpired:
+                _log_error(f"XTTS synth timed out after {xtts_timeout}s")
+            except Exception as exc:
+                _log_error(f"XTTS synth failed: {exc}")
+
+            if not xtts_ok:
+                # Fallback so /api/chat still returns audio_url quickly.
+                if shutil.which(config.get("piper_bin")):
+                    alt = "piper"
+                elif shutil.which("espeak-ng"):
+                    alt = "espeak-ng"
+                elif shutil.which("espeak"):
+                    alt = "espeak"
+                else:
+                    return None
+
+                if alt == "piper":
+                    cmd = [config.get("piper_bin"), "--output_file", str(out_file)]
+                    model = config.get("piper_voice_model")
+                    if model:
+                        cmd.extend(["--model", model])
+                    subprocess.run(
+                        cmd,
+                        input=text.encode("utf-8"),
+                        check=True,
+                        capture_output=True,
+                        timeout=60,
+                    )
+                else:
+                    subprocess.run(
+                        [alt, "-w", str(out_file), text],
+                        check=True,
+                        capture_output=True,
+                        timeout=60,
+                    )
+
         else:
             raise RuntimeError("No TTS backend")
-        
+
         if cache:
             shutil.copy(out_file, cache_file)
         return out_file
+
     except Exception as e:
         _log_error(f"TTS failed: {e}")
         return None
@@ -270,13 +371,17 @@ async def _stream_llama(messages: list[dict[str, str]], session_id: str, transcr
                             sentences = re.split(r'(?<=[.!?\n])\s+', sentence_buffer)
                             if len(sentences) > 1:
                                 for s in sentences[:-1]:
-                                    if s.strip():
-                                        audio_path = _synthesize_speech(s.strip(), session_id)
-                                        yield json.dumps({
-                                            "type": "sentence",
-                                            "text": s.strip(),
-                                            "audio_url": f"/audio/{audio_path.name}" if audio_path else None
-                                        }) + "\n"
+                                    if not s.strip():
+                                        continue
+                                    s2 = s.strip()
+                                    if len(s2) > int(config.get("xtts_max_chars", 400)):
+                                        s2 = s2[: int(config.get("xtts_max_chars", 400))]
+                                    audio_path = _synthesize_speech(s2, session_id)
+                                    yield json.dumps({
+                                        "type": "sentence",
+                                        "text": s.strip(),
+                                        "audio_url": f"/audio/{audio_path.name}" if audio_path else None
+                                    }) + "\n"
                                 sentence_buffer = sentences[-1]
                         
                         yield json.dumps({"type": "token", "text": token}) + "\n"
@@ -364,4 +469,24 @@ def api_session(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=config.get("port"), reload=False)
+
+    disable_tls = os.environ.get("DISABLE_TLS", "").strip().lower() in {"1", "true", "yes", "on"}
+    ssl_kwargs: dict[str, str] = {}
+
+    # Serve HTTPS by default to satisfy browser secure-context requirements for microphone.
+    if not disable_tls:
+        ssl_certfile = BASE_DIR / "tls" / "voice_assistant.crt"
+        ssl_keyfile = BASE_DIR / "tls" / "voice_assistant.key"
+        if ssl_certfile.exists() and ssl_keyfile.exists():
+            ssl_kwargs = {
+                "ssl_certfile": str(ssl_certfile),
+                "ssl_keyfile": str(ssl_keyfile),
+            }
+
+    uvicorn.run(
+        "app:app",
+        host="0.0.0.0",
+        port=config.get("port"),
+        reload=False,
+        **ssl_kwargs,
+    )
