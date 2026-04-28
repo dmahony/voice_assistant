@@ -12,6 +12,8 @@ const voiceFileInput = document.getElementById('voice-file');
 const voiceUploadBtn = document.getElementById('voice-upload-btn');
 const voiceListEl = document.getElementById('voice-list');
 const connectionNoteEl = document.getElementById('connection-note');
+const textInput = document.getElementById('text-input');
+const textSendBtn = document.getElementById('text-send-btn');
 
 const chatState = { mediaRecorder: null, chunks: [], stream: null };
 const voiceState = { mediaRecorder: null, chunks: [], stream: null };
@@ -520,6 +522,165 @@ async function refreshVoiceLibrary() {
     }
   }
 }
+
+// ── Text chat ──────────────────────────────────────────────────────
+
+function isChatting() {
+  return textSendBtn.disabled || startBtn.disabled;
+}
+
+async function handleTextChat() {
+  const text = textInput.value.trim();
+  if (!text || isChatting()) return;
+
+  textInput.value = '';
+  textSendBtn.disabled = true;
+  textInput.disabled = true;
+
+  stopPlayback();
+  removeTranscribingIndicator();
+
+  addMessage('user', text);
+  setStatus('Thinking...', 'transcribing');
+
+  try {
+    const response = await fetch('/api/chat/text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text }),
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || `HTTP ${response.status}`);
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+
+    if (contentType.includes('text/event-stream')) {
+      // ── Streaming (SSE) ──
+      const assistantRow = document.createElement('article');
+      assistantRow.className = 'message assistant streaming';
+      const head = document.createElement('div');
+      head.className = 'message-head';
+      head.textContent = 'Assistant';
+      const body = document.createElement('div');
+      body.className = 'message-body';
+      body.textContent = '';
+      assistantRow.appendChild(head);
+      assistantRow.appendChild(body);
+      chatEl.appendChild(assistantRow);
+      scrollChatToBottom();
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullReply = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data: ')) continue;
+          const dataStr = trimmed.slice(6);
+          if (dataStr === '[DONE]') continue;
+
+          try {
+            const event = JSON.parse(dataStr);
+
+            if (event.type === 'transcript') {
+              // Already shown as user message above; skip.
+              continue;
+            }
+
+            if (event.type === 'token') {
+              body.textContent += event.text;
+              fullReply += event.text;
+              scrollChatToBottom();
+              continue;
+            }
+
+            if (event.type === 'sentence') {
+              body.textContent += event.text;
+              fullReply += event.text;
+              scrollChatToBottom();
+              if (event.audio_url) {
+                stopPlayback();
+                audioPlayer.src = event.audio_url;
+                activeAudioUrl = null;
+                audioPlayer.play().catch(() => {});
+              }
+              continue;
+            }
+
+            if (event.type === 'error') {
+              setStatus(`Error: ${event.text}`, 'error');
+              continue;
+            }
+          } catch { /* skip malformed JSON lines */ }
+        }
+      }
+
+      if (fullReply) {
+        setStatus('Ready.', 'idle');
+      }
+    } else {
+      // ── Non-streaming (JSON) ──
+      const data = JSON.parse(await response.text());
+      addMessage('assistant', data.assistant_reply);
+      setStatus('Speaking...', 'speaking');
+
+      if (data.audio_url) {
+        stopPlayback();
+        audioPlayer.src = data.audio_url;
+        activeAudioUrl = null;
+        try {
+          await audioPlayer.play();
+        } catch (err) {
+          console.warn(err);
+          setStatus('Reply ready. Tap Play to hear audio.', 'idle');
+        }
+      }
+      setStatus('Ready.', 'idle');
+    }
+  } catch (err) {
+    console.error(err);
+    setStatus(`Error: ${err.message}`, 'error');
+  } finally {
+    textSendBtn.disabled = false;
+    textInput.disabled = false;
+    textInput.focus();
+  }
+}
+
+textInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    handleTextChat().catch((err) => {
+      console.error(err);
+      setStatus(`Error: ${err.message}`, 'error');
+      textSendBtn.disabled = false;
+      textInput.disabled = false;
+    });
+  }
+});
+
+textSendBtn.addEventListener('click', () => {
+  handleTextChat().catch((err) => {
+    console.error(err);
+    setStatus(`Error: ${err.message}`, 'error');
+    textSendBtn.disabled = false;
+    textInput.disabled = false;
+  });
+});
+
+// ── Audio events ───────────────────────────────────────────────────
 
 audioPlayer.addEventListener('ended', () => {
   setStatus('Ready.', 'idle');

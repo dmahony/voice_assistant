@@ -181,6 +181,7 @@ select:focus-visible {
   grid-template-areas:
     "topbar topbar"
     "controls controls"
+    "textinput textinput"
     "status status"
     "chat voice"
     "debug voice";
@@ -346,6 +347,45 @@ select:focus-visible {
   padding: 16px;
   border-radius: var(--radius-l);
   align-items: center;
+}
+
+.text-input-bar {
+  grid-area: textinput;
+  display: flex;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: var(--radius-m);
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--surface) 94%, transparent);
+  box-shadow: var(--shadow-panel);
+  align-items: center;
+}
+
+.text-input-bar input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  background: color-mix(in oklab, var(--surface-2) 82%, transparent);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 10px 16px;
+  min-height: 46px;
+  font-size: 0.95rem;
+}
+
+.text-input-bar input::placeholder {
+  color: var(--muted);
+}
+
+.text-input-bar input:focus {
+  border-color: color-mix(in oklab, var(--accent) 56%, var(--border-strong));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 14%, transparent);
+  outline: none;
+}
+
+.text-input-bar button {
+  min-height: 46px;
+  flex-shrink: 0;
 }
 
 .status-line {
@@ -709,6 +749,7 @@ audio {
     grid-template-areas:
       "topbar"
       "controls"
+      "textinput"
       "status"
       "chat"
       "voice"

@@ -191,15 +191,29 @@ def _synthesize_speech(text: str, session_id: str, cache: bool = False) -> Path 
             model = config.get("piper_voice_model")
             if model:
                 cmd.extend(["--model", model])
-            # Some piper builds use --model for the ONNX path.
-            # If piper fails with missing model, we still want to surface that error.
-            subprocess.run(
-                cmd,
-                input=text.encode("utf-8"),
-                check=True,
-                capture_output=True,
-                timeout=120,
-            )
+            try:
+                subprocess.run(
+                    cmd,
+                    input=text.encode("utf-8"),
+                    check=True,
+                    capture_output=True,
+                    timeout=120,
+                )
+            except Exception as piper_err:
+                _log_error(f"Piper TTS failed, trying espeak fallback: {piper_err}")
+                # Fall through to espeak-ng/espeak
+                if shutil.which("espeak-ng"):
+                    subprocess.run(
+                        ["espeak-ng", "-w", str(out_file), text],
+                        check=True, capture_output=True, timeout=60,
+                    )
+                elif shutil.which("espeak"):
+                    subprocess.run(
+                        ["espeak", "-w", str(out_file), text],
+                        check=True, capture_output=True, timeout=60,
+                    )
+                else:
+                    raise RuntimeError("Piper TTS failed and no espeak fallback available")
 
         elif backend in {"espeak", "espeak-ng"}:
             subprocess.run([backend, "-w", str(out_file), text], check=True, capture_output=True, timeout=60)
@@ -477,6 +491,44 @@ async def api_chat(request: Request, bg_tasks: BackgroundTasks, audio: UploadFil
         if tmp_path.exists(): tmp_path.unlink()
         wav = tmp_path.with_suffix(".wav")
         if wav.exists(): wav.unlink()
+
+
+@app.post("/api/chat/text")
+async def api_chat_text(request: Request, bg_tasks: BackgroundTasks):
+    """Accepts JSON {message: string} instead of audio. Runs transcribe-less LLM pipeline."""
+    sid, is_new = _get_or_create_session_id(request)
+    ensure_session(sid)
+    bg_tasks.add_task(_cleanup_old_files)
+
+    data = await request.json()
+    transcript = (data.get("message") or "").strip()
+    if not transcript:
+        return JSONResponse({"ok": False, "error": "No message provided"}, status_code=400)
+
+    save_message(sid, "user", transcript)
+    history = _trim_history(get_messages(sid))
+
+    if config.get("llama_stream"):
+        return StreamingResponse(
+            _stream_llama(history, sid, transcript),
+            media_type="text/event-stream",
+        )
+
+    payload = {"messages": history, "temperature": 0.4, "stream": False, "model": config.get("llama_model")}
+    try:
+        r = requests.post(config.get("llama_chat_url"), json=payload, timeout=config.get("http_timeout"))
+        r.raise_for_status()
+        reply = r.json()["choices"][0]["message"]["content"].strip()
+        save_message(sid, "assistant", reply)
+        audio_path = _synthesize_speech(reply, sid)
+        return {
+            "ok": True, "transcript": transcript, "assistant_reply": reply,
+            "audio_url": f"/audio/{audio_path.name}" if audio_path else None,
+        }
+    except Exception as e:
+        _log_error(f"Text chat failed: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
 
 @app.get("/api/session")
 def api_session(request: Request):
