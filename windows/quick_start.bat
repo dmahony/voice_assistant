@@ -58,6 +58,22 @@ if errorlevel 1 (
     echo.
 )
 
+REM Download Piper voice model (required for default TTS)
+echo Checking Piper voice model...
+if not exist "models\piper\en-us-lessac-medium.onnx" (
+    echo [INFO] Downloading Piper model en-us-lessac-medium.onnx...
+    powershell -Command "(New-Object Net.WebClient).DownloadFile('https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx','models\\piper\\en-us-lessac-medium.onnx')"
+    if errorlevel 1 (
+        echo ERROR: Piper model download failed.
+        pause
+        exit /b 1
+    )
+) else (
+    echo [OK] Piper model found.
+)
+
+echo.
+
 REM Check for binaries
 echo Checking for bundled binaries...
 if exist "bin\windows\ffmpeg.exe" (
