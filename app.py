@@ -21,7 +21,13 @@ from fastapi.staticfiles import StaticFiles
 from config import config
 from db import save_message, get_messages, clear_session_messages, ensure_session
 from tools import call_tool
-from voice_library import resolve_xtts_speaker_wav
+from voice_library import (
+    resolve_xtts_speaker_wav,
+    list_voice_profiles,
+    create_voice_profile,
+    select_voice_profile,
+    delete_voice_profile,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -477,6 +483,59 @@ def api_session(request: Request):
     sid, is_new = _get_or_create_session_id(request)
     ensure_session(sid)
     return {"ok": True, "session_id": sid, "messages": get_messages(sid)}
+
+
+@app.get("/api/voices")
+def api_list_voices():
+    return {"ok": True, "voices": list_voice_profiles(BASE_DIR)}
+
+
+@app.post("/api/voices")
+async def api_create_voice(name: str = "", audio: UploadFile = File(...)):
+    if not name or not name.strip():
+        return JSONResponse({"ok": False, "error": "name is required"}, status_code=400)
+
+    suffix = Path(audio.filename or "upload").suffix or ".webm"
+    tmp_src = TEMP_DIR / f"voice_upload_{uuid.uuid4().hex}{suffix}"
+    with tmp_src.open("wb") as f:
+        f.write(await audio.read())
+
+    try:
+        voice = create_voice_profile(BASE_DIR, name.strip(), tmp_src)
+        voices = list_voice_profiles(BASE_DIR)
+        return {"ok": True, "voice": voice, "voices": voices}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    finally:
+        try:
+            if tmp_src.exists():
+                tmp_src.unlink()
+        except Exception:
+            pass
+
+
+@app.post("/api/voices/select")
+async def api_select_voice(request: Request):
+    form = await request.form()
+    voice_id = form.get("voice_id")
+    if not voice_id:
+        return JSONResponse({"ok": False, "error": "voice_id is required"}, status_code=400)
+    try:
+        voice = select_voice_profile(BASE_DIR, str(voice_id))
+        voices = list_voice_profiles(BASE_DIR)
+        return {"ok": True, "voice": voice, "voices": voices}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.delete("/api/voices/{voice_id}")
+async def api_delete_voice(voice_id: str):
+    try:
+        delete_voice_profile(BASE_DIR, voice_id)
+        voices = list_voice_profiles(BASE_DIR)
+        return {"ok": True, "voices": voices}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 if __name__ == "__main__":
     import uvicorn
