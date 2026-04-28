@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator
 
 import requests
-from fastapi import FastAPI, File, Request, UploadFile, BackgroundTasks
+from fastapi import FastAPI, File, Request, UploadFile, BackgroundTasks, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -491,7 +491,7 @@ def api_list_voices():
 
 
 @app.post("/api/voices")
-async def api_create_voice(name: str = "", audio: UploadFile = File(...)):
+async def api_create_voice(name: str = Form(""), audio: UploadFile = File(...)):
     if not name or not name.strip():
         return JSONResponse({"ok": False, "error": "name is required"}, status_code=400)
 
